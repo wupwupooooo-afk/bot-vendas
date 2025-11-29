@@ -1,256 +1,202 @@
 import discord
 from discord.ext import commands
-from discord.ui import View, Button, Modal, TextInput, Select
 import json
 import os
 
-# ========== CONFIGURAÇÃO ==========
+TOKEN = os.getenv("TOKEN")
+
 PREFIXO = "!"
 CARGO_ADMIN_ID = 1441627740569735298
-CATEGORIA_TICKET_ID = 1442727787180851362
-ARQUIVO = "produtos.json"
-# ================================
-
-# ✅ TOKEN SEGURO (NÃO APARECE NO CÓDIGO)
-TOKEN = os.getenv("TOKEN")
+CATEGORIA_TICKET = 1442727787180851362
+DB = "produtos.json"
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix=PREFIXO, intents=intents)
 
-
-# ========= KEEP ALIVE =========
-from keep_alive import keep_alive
-keep_alive()
-# ==============================
-
-
-# ========= UTIL =========
-def carregar():
-    if not os.path.exists(ARQUIVO):
-        with open(ARQUIVO, "w", encoding="utf-8") as f:
+# ------------------- BANCO -------------------
+def load():
+    if not os.path.exists(DB):
+        with open(DB, "w") as f:
             json.dump({}, f)
-    with open(ARQUIVO, encoding="utf-8") as f:
+    with open(DB, "r", encoding="utf-8") as f:
         return json.load(f)
 
-def salvar(dados):
-    with open(ARQUIVO, "w", encoding="utf-8") as f:
-        json.dump(dados, f, indent=4, ensure_ascii=False)
+def save(data):
+    with open(DB, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4, ensure_ascii=False)
 
 def is_admin(member):
-    return any(role.id == CARGO_ADMIN_ID for role in member.roles)
+    return any(r.id == CARGO_ADMIN_ID for r in member.roles)
 
+# ------------------- VIEW PERSISTENTE -------------------
+class LojaView(discord.ui.View):
+    def __init__(self, canal_id):
+        super().__init__(timeout=None)
+        self.canal_id = str(canal_id)
+        self.add_item(LojaMenu(self.canal_id))
 
-# ========= BOT ONLINE =========
-@bot.event
-async def on_ready():
-    print(f"✅ BOT ONLINE: {bot.user}")
+class LojaMenu(discord.ui.Select):
+    def __init__(self, canal_id):
+        data = load()
+        produtos = data.get(canal_id, {})
 
-
-# ========= MODAL PAINEL =========
-class PainelModal(Modal):
-    def __init__(self):
-        super().__init__(title="Criar Painel")
-        self.titulo = TextInput(label="Titulo")
-        self.desc = TextInput(label="Descrição", style=discord.TextStyle.long)
-        self.img = TextInput(label="Imagem topo (opcional)", required=False)
-        self.rodape = TextInput(label="Rodapé")
-        self.cor = TextInput(label="Cor HEX ex: #8e44ad")
-
-        self.add_item(self.titulo)
-        self.add_item(self.desc)
-        self.add_item(self.img)
-        self.add_item(self.rodape)
-        self.add_item(self.cor)
-
-    async def on_submit(self, interaction):
-        try:
-            cor = int(self.cor.value.replace("#", ""), 16)
-            embed = discord.Embed(
-                title=self.titulo.value,
-                description=self.desc.value,
-                color=cor
+        options = []
+        for nome, info in produtos.items():
+            options.append(
+                discord.SelectOption(
+                    label=nome,
+                    description=f"R${info['preco']} | Estoque: {info['estoque']}",
+                    value=nome
+                )
             )
 
-            if self.img.value.startswith("http"):
-                embed.set_image(url=self.img.value)
-
-            embed.set_footer(text=self.rodape.value)
-
-            await interaction.channel.send(embed=embed, view=PainelView())
-            await interaction.response.send_message("✅ Painel criado!", ephemeral=True)
-
-        except:
-            await interaction.response.send_message("❌ Erro ao criar painel. Verifique a cor ou imagem.", ephemeral=True)
-
-
-# ========= PRODUTO MODAL =========
-class ProdutoModal(Modal):
-    def __init__(self):
-        super().__init__(title="Adicionar Produto")
-        self.nome = TextInput(label="Nome")
-        self.preco = TextInput(label="Preço")
-        self.estoque = TextInput(label="Estoque")
-        self.cupom = TextInput(label="Cupom(opcional)", required=False)
-
-        for item in [self.nome, self.preco, self.estoque, self.cupom]:
-            self.add_item(item)
-
-    async def on_submit(self, interaction):
-        dados = carregar()
-        dados[self.nome.value] = {
-            "preco": self.preco.value,
-            "estoque": int(self.estoque.value),
-            "cupom": self.cupom.value
-        }
-        salvar(dados)
-        await interaction.response.send_message("✅ Produto adicionado!", ephemeral=True)
-
-
-# ========= PAINEL VIEW =========
-class PainelView(View):
-    def __init__(self):
-        super().__init__(timeout=None)
-        self.add_item(ProdutoMenu())
-        self.add_item(AddProduto())
-
-
-class AddProduto(Button):
-    def __init__(self):
-        super().__init__(label="➕ Adicionar Produto", style=discord.ButtonStyle.blurple)
-
-    async def callback(self, interaction):
-        if not is_admin(interaction.user):
-            return await interaction.response.send_message("❌ Apenas admins.", ephemeral=True)
-        await interaction.response.send_modal(ProdutoModal())
-
-
-# ========= MENU PRODUTOS =========
-class ProdutoMenu(Select):
-    def __init__(self):
-        dados = carregar()
-        options = []
-
-        for nome, info in dados.items():
-            desc = f"Preço: {info['preco']} | Estoque: {info['estoque']}"
-            options.append(discord.SelectOption(label=nome, description=desc))
-
         if not options:
-            options.append(discord.SelectOption(label="Sem produtos", description="Nenhum cadastrado", value="0"))
+            options.append(discord.SelectOption(label="Sem produtos", value="nulo"))
 
-        super().__init__(placeholder="Escolha o produto", options=options)
+        super().__init__(placeholder="Escolha um produto", options=options)
 
-    async def callback(self, interaction):
-        produto = self.values[0]
-        if produto == "0":
-            return await interaction.response.send_message("Nenhum produto disponível.", ephemeral=True)
+    async def callback(self, interaction: discord.Interaction):
+        nome = self.values[0]
+        if nome == "nulo":
+            return await interaction.response.send_message("Nenhum produto.", ephemeral=True)
+        await abrir_ticket(interaction, nome)
 
-        await abrir_ticket(interaction, produto)
-
-
-# ========= TICKET =========
+# ------------------- TICKET -------------------
 async def abrir_ticket(interaction, produto):
-    dados = carregar()
-    info = dados[produto]
+    data = load()
+    canal_id = str(interaction.channel.id)
+    info = data[canal_id][produto]
 
     guild = interaction.guild
-    categoria = guild.get_channel(CATEGORIA_TICKET_ID)
-    cargo = guild.get_role(CARGO_ADMIN_ID)
+    categoria = guild.get_channel(CATEGORIA_TICKET)
+    admin = guild.get_role(CARGO_ADMIN_ID)
 
     overwrites = {
         guild.default_role: discord.PermissionOverwrite(view_channel=False),
         interaction.user: discord.PermissionOverwrite(view_channel=True),
-        cargo: discord.PermissionOverwrite(view_channel=True)
+        admin: discord.PermissionOverwrite(view_channel=True)
     }
 
-    canal = await guild.create_text_channel(f"ticket-{interaction.user.name}", category=categoria, overwrites=overwrites)
+    canal = await guild.create_text_channel(
+        name=f"ticket-{interaction.user.name}",
+        category=categoria,
+        overwrites=overwrites
+    )
 
-    embed = discord.Embed(title="🛒 COMPRA ABERTA", color=0x2ecc71)
+    embed = discord.Embed(title="🛒 Nova Compra", color=0x2ecc71)
     embed.add_field(name="Produto", value=produto)
-    embed.add_field(name="Preço", value=info["preco"])
-    embed.add_field(name="Estoque", value=info["estoque"])
-    embed.add_field(name="Cupom", value=info["cupom"] or "Nenhum")
+    embed.add_field(name="Preço", value=info['preco'])
+    embed.add_field(name="Estoque", value=info['estoque'])
 
-    await canal.send(embed=embed, view=ConfirmarView(produto))
+    await canal.send(embed=embed, view=TicketView(canal_id, produto))
     await interaction.response.send_message("✅ Ticket criado!", ephemeral=True)
 
-
-# ========= CONFIRMAR =========
-class ConfirmarView(View):
-    def __init__(self, produto):
+# ------------------- VIEW TICKET -------------------
+class TicketView(discord.ui.View):
+    def __init__(self, canal_id, produto):
         super().__init__(timeout=None)
+        self.canal_id = canal_id
         self.produto = produto
-        self.add_item(Confirmar())
-        self.add_item(Fechar())
 
+        self.add_item(ConfirmarCompra())
+        self.add_item(FecharTicket())
 
-class Confirmar(Button):
+class ConfirmarCompra(discord.ui.Button):
     def __init__(self):
-        super().__init__(label="✅ Confirmar Compra", style=discord.ButtonStyle.green)
+        super().__init__(label="✅ Confirmar", style=discord.ButtonStyle.green)
 
-    async def callback(self, interaction):
+    async def callback(self, interaction: discord.Interaction):
         if not is_admin(interaction.user):
-            return await interaction.response.send_message("❌ Apenas admin.", ephemeral=True)
+            return await interaction.response.send_message("Apenas admin.", ephemeral=True)
 
-        dados = carregar()
-        if dados[self.view.produto]["estoque"] <= 0:
-            return await interaction.response.send_message("❌ Sem estoque!", ephemeral=True)
+        data = load()
+        info = data[self.view.canal_id][self.view.produto]
 
-        dados[self.view.produto]["estoque"] -= 1
-        salvar(dados)
+        if info['estoque'] <= 0:
+            return await interaction.response.send_message("Sem estoque!", ephemeral=True)
+
+        info['estoque'] -= 1
+        save(data)
 
         await interaction.channel.send(f"✅ Compra confirmada por {interaction.user.mention}")
-        await interaction.response.send_message("✅ Estoque atualizado!", ephemeral=True)
+        await interaction.response.send_message("Estoque atualizado.", ephemeral=True)
 
-
-class Fechar(Button):
+class FecharTicket(discord.ui.Button):
     def __init__(self):
-        super().__init__(label="🔒 Fechar Ticket", style=discord.ButtonStyle.red)
+        super().__init__(label="🔒 Fechar", style=discord.ButtonStyle.red)
 
-    async def callback(self, interaction):
+    async def callback(self, interaction: discord.Interaction):
         if not is_admin(interaction.user):
-            return await interaction.response.send_message("❌ Apenas admin.", ephemeral=True)
+            return await interaction.response.send_message("Apenas admin.", ephemeral=True)
         await interaction.channel.delete()
 
-
-# ========= COMANDOS =========
+# ------------------- COMANDOS -------------------
 @bot.command()
 async def vendas(ctx):
+    canal_id = str(ctx.channel.id)
+    data = load()
+    data.setdefault(canal_id, {})
+    save(data)
+
+    embed = discord.Embed(title="🛍 LOJA", description="Escolha um produto abaixo")
+    await ctx.send(embed=embed, view=LojaView(canal_id))
+
+@bot.command()
+async def addproduto(ctx, *, texto):
     if not is_admin(ctx.author):
-        return await ctx.send("❌ Sem permissão.")
-    await ctx.send("Clique para criar o painel:", view=CriarPainel())
+        return await ctx.send("Apenas admins.")
 
+    try:
+        nome, preco, estoque = texto.split("|")
+    except:
+        return await ctx.send("Uso: !addproduto Nome | Preço | Estoque")
 
-class CriarPainel(View):
-    def __init__(self):
-        super().__init__()
-        self.add_item(BotaoPainel())
+    data = load()
+    canal_id = str(ctx.channel.id)
 
+    data.setdefault(canal_id, {})
+    data[canal_id][nome.strip()] = {
+        "preco": preco.strip(),
+        "estoque": int(estoque.strip())
+    }
 
-class BotaoPainel(Button):
-    def __init__(self):
-        super().__init__(label="🎨 Criar Painel", style=discord.ButtonStyle.green)
-
-    async def callback(self, interaction):
-        if not is_admin(interaction.user):
-            return await interaction.response.send_message("❌ Apenas admins.", ephemeral=True)
-        await interaction.response.send_modal(PainelModal())
-
-
-@bot.command()
-async def rvendas(ctx):
-    dados = carregar()
-    for p in dados:
-        dados[p]["estoque"] = 0
-    salvar(dados)
-    await ctx.send("✅ Estoques resetados!")
-
+    save(data)
+    await ctx.send("✅ Produto cadastrado e menu atualizado!")
 
 @bot.command()
-async def pvendas(ctx):
-    salvar({})
-    await ctx.send("🗑 Produtos apagados!")
+async def estoque(ctx):
+    if not is_admin(ctx.author):
+        return
 
+    data = load()
+    canal_id = str(ctx.channel.id)
 
-# ========= INICIAR =========
+    if canal_id not in data:
+        return await ctx.send("Nenhum produto.")
+
+    msg = ""
+    for p, i in data[canal_id].items():
+        msg += f"{p} → {i['estoque']}\n"
+
+    await ctx.send(f"📦 Estoque atual:\n{msg}")
+
+@bot.command()
+async def limpar(ctx):
+    if not is_admin(ctx.author):
+        return
+
+    data = load()
+    canal_id = str(ctx.channel.id)
+    data[canal_id] = {}
+    save(data)
+
+    await ctx.send("🗑 Produtos apagados neste canal!")
+
+# ------------------- START -------------------
+@bot.event
+async def on_ready():
+    print("✅ BOT ONLINE")
+    for guild in bot.guilds:
+        print(f"Conectado: {guild.name}")
+
 bot.run(TOKEN)
-
